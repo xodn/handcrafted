@@ -1,4 +1,4 @@
-package com.mini.spring.bean;
+package com.mini.spring.ioc.bean;
 
 public class BeanDefinition {
     private Class<?> beanClass;

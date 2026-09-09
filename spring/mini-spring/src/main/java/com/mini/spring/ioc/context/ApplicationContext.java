@@ -1,12 +1,19 @@
 package com.mini.spring.ioc.context;
 
+import com.mini.spring.demo.LogBeanPostProcessor;
 import com.mini.spring.ioc.annotation.Autowired;
 import com.mini.spring.ioc.annotation.Component;
-import com.mini.spring.bean.BeanDefinition;
+import com.mini.spring.ioc.bean.BeanDefinition;
+import com.mini.spring.ioc.annotation.PostConstruct;
+import com.mini.spring.ioc.bean.BeanPostProcessor;
+import com.mini.spring.ioc.bean.InitializingBean;
 
 import java.beans.Introspector;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 public class ApplicationContext {
@@ -14,8 +21,11 @@ public class ApplicationContext {
 
     private final Map<String, Object> singletonObjects = new HashMap<>();
 
+    private final List<BeanPostProcessor> beanPostProcessors = new ArrayList<>();
+
     public ApplicationContext(Class<?>... componentClasses) {
         registerBeanDefinitions(componentClasses);
+        registerBeanPostProcessor();
         createBeans();
     }
 
@@ -73,6 +83,10 @@ public class ApplicationContext {
         }
     }
 
+    private void registerBeanPostProcessor() {
+        beanPostProcessors.add(new LogBeanPostProcessor());
+    }
+
     /**
      * 存在实例化顺序问题，如果先创建UserService，那么就会注入失败
      */
@@ -108,5 +122,50 @@ public class ApplicationContext {
             populateBean(bean);
         }
 
+        // 第三阶段： Bean初始化
+        for (Map.Entry<String, Object> entry : singletonObjects.entrySet()) {
+            Object bean = entry.getValue();
+            String beanName = entry.getKey();
+
+            for (BeanPostProcessor processor : beanPostProcessors) {
+                bean = processor.postProcessBeforeInitialization(bean, beanName);
+            }
+
+            initializeBean(bean, beanName);
+
+            for (BeanPostProcessor processor : beanPostProcessors) {
+                bean = processor.postProcessAfterInitialization(bean, beanName);
+            }
+
+            singletonObjects.put(entry.getKey(), bean);
+        }
+    }
+
+    private void initializeBean(Object bean, String beanName) {
+        invokePostConstruct(bean);
+
+        if (bean instanceof InitializingBean) {
+            try {
+                // 扩展点
+                ((InitializingBean) bean).afterPropertiesSet();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    private void invokePostConstruct(Object bean) {
+        for (Method method : bean.getClass().getDeclaredMethods()) {
+            if (!method.isAnnotationPresent(PostConstruct.class)) {
+                continue;
+            }
+
+            try {
+                method.setAccessible(true);
+                method.invoke(bean);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
 }

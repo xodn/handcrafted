@@ -6,11 +6,11 @@
 
 - [x] BeanDefinition
 - [ ] BeanFactory
-- [ ] Singleton Container
-- [ ] Dependency Injection
-- [ ] Bean Lifecycle
-- [ ] BeanPostProcessor
-- [ ] AOP
+- [x] Singleton Container
+- [x] Dependency Injection
+- [x] Bean Lifecycle
+- [x] BeanPostProcessor
+- [x] AOP
 - [ ] Circular Dependency
 - [ ] Transaction
 

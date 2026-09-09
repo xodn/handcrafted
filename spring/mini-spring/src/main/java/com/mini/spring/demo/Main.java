@@ -4,9 +4,9 @@ import com.mini.spring.ioc.context.ApplicationContext;
 
 public class Main {
     public static void main(String[] args) {
-        ApplicationContext context = new ApplicationContext(UserService.class, UserRepository.class);
+        ApplicationContext context = new ApplicationContext(UserServiceImpl.class, UserRepository.class);
 
-        UserService userService = (UserService) context.getBean("userService");
+        UserService userService = (UserService) context.getBean("userServiceImpl");
 
         userService.hello();
     }
