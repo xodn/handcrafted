@@ -3,23 +3,25 @@ package com.mini.spring.ioc.context;
 import com.mini.spring.demo.LogBeanPostProcessor;
 import com.mini.spring.ioc.annotation.Autowired;
 import com.mini.spring.ioc.annotation.Component;
-import com.mini.spring.ioc.bean.BeanDefinition;
+import com.mini.spring.ioc.bean.*;
 import com.mini.spring.ioc.annotation.PostConstruct;
-import com.mini.spring.ioc.bean.BeanPostProcessor;
-import com.mini.spring.ioc.bean.InitializingBean;
 
 import java.beans.Introspector;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public class ApplicationContext {
     private final Map<String, BeanDefinition> beanDefinitions = new HashMap<>();
 
     private final Map<String, Object> singletonObjects = new HashMap<>();
+
+    private final Map<String, Object> earlySingletonObjects = new HashMap<>();
+
+    private final Map<String, ObjectFactory<?>> singletonObjectFactories = new HashMap<>();
+
+    private final Map<String, Object> earlyBeanReferences = new HashMap<>();
 
     private final List<BeanPostProcessor> beanPostProcessors = new ArrayList<>();
 
@@ -50,15 +52,35 @@ public class ApplicationContext {
         }
     }
 
-
     public Object getBean(String beanName) {
-        return singletonObjects.get(beanName);
+        Object bean = singletonObjects.get(beanName);
+        if (Objects.nonNull(bean)) {
+            return bean;
+        }
+
+        bean = earlySingletonObjects.get(beanName);
+        if (Objects.nonNull(bean)) {
+            return bean;
+        }
+
+        ObjectFactory<?> factory = singletonObjectFactories.get(beanName);
+        if (Objects.nonNull(factory)) {
+            bean = factory.getObject();
+            earlySingletonObjects.put(beanName, bean);
+            singletonObjectFactories.remove(beanName);
+            return bean;
+        }
+
+        BeanDefinition beanDefinition = beanDefinitions.get(beanName);
+
+        return createBean(beanName, beanDefinition);
     }
 
     private Object getBeanByType(Class<?> type) {
-        for (Object bean : singletonObjects.values()) {
-            if (type.isAssignableFrom(bean.getClass())) {
-                return bean;
+        for (String beanName : beanDefinitions.keySet()) {
+            BeanDefinition beanDefinition = beanDefinitions.get(beanName);
+            if (type.isAssignableFrom(beanDefinition.getBeanClass())) {
+                return getBean(beanName);
             }
         }
 
@@ -87,61 +109,80 @@ public class ApplicationContext {
         beanPostProcessors.add(new LogBeanPostProcessor());
     }
 
-    /**
-     * 存在实例化顺序问题，如果先创建UserService，那么就会注入失败
-     */
-    // private void createBeans() {
-    //     for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
-    //         String beanName = entry.getKey();
-    //         BeanDefinition beanDefinition = entry.getValue();
-    //
-    //         try {
-    //             Object bean = beanDefinition.getBeanClass().getDeclaredConstructor().newInstance();
-    //
-    //             singletonObjects.put(beanName, bean);
-    //         } catch (Exception e) {
-    //             throw new RuntimeException(e);
-    //         }
-    //     }
-    // }
-
     private void createBeans() {
-        // 第一阶段：实例化所有 Bean
-        for (Map.Entry<String, BeanDefinition> entry : beanDefinitions.entrySet()) {
-            try {
-                Object bean = entry.getValue().getBeanClass().getDeclaredConstructor().newInstance();
-
-                singletonObjects.put(entry.getKey(), bean);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }
-
-        // 第二阶段：属性注入
-        for (Object bean : singletonObjects.values()) {
-            populateBean(bean);
-        }
-
-        // 第三阶段： Bean初始化
-        for (Map.Entry<String, Object> entry : singletonObjects.entrySet()) {
-            Object bean = entry.getValue();
-            String beanName = entry.getKey();
-
-            for (BeanPostProcessor processor : beanPostProcessors) {
-                bean = processor.postProcessBeforeInitialization(bean, beanName);
-            }
-
-            initializeBean(bean, beanName);
-
-            for (BeanPostProcessor processor : beanPostProcessors) {
-                bean = processor.postProcessAfterInitialization(bean, beanName);
-            }
-
-            singletonObjects.put(entry.getKey(), bean);
+        for (String beanName : beanDefinitions.keySet()) {
+            getBean(beanName);
         }
     }
 
-    private void initializeBean(Object bean, String beanName) {
+    private Object createBean(String beanName, BeanDefinition beanDefinition) {
+        // 实例化
+        Object bean = instantiateBean(beanDefinition);
+
+        // 提前暴露
+        Object rawBean = bean;
+        singletonObjectFactories.put(beanName, () -> getEarlyBeanReference(beanName, rawBean));
+
+        // 属性注入
+        populateBean(bean);
+
+        // 初始化
+        bean = initializeBean(bean, beanName);
+
+        // 获取最终对象
+        Object exposedObject = bean;
+
+        // 如果循环依赖期间已经产生了早期对象，则使用早期对象
+        Object earlyReference = earlyBeanReferences.get(beanName);
+        if (Objects.nonNull(earlyReference)) {
+            exposedObject = earlyReference;
+        }
+
+        // 放入一级缓存
+        singletonObjects.put(beanName, exposedObject);
+
+        // 清理二、三级缓存
+        earlySingletonObjects.remove(beanName);
+        singletonObjectFactories.remove(beanName);
+        earlyBeanReferences.remove(beanName);
+
+        return exposedObject;
+    }
+
+    private Object getEarlyBeanReference(String beanName, Object bean) {
+        Object exposedObject = earlyBeanReferences.get(beanName);
+        if (Objects.nonNull(exposedObject)) {
+            return exposedObject;
+        }
+
+        exposedObject = bean;
+
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            if (processor instanceof SmartInstantiationAwareBeanPostProcessor smartProcessor) {
+                exposedObject = smartProcessor.getEarlyBeanReference(exposedObject, beanName);
+            }
+        }
+
+        earlyBeanReferences.put(beanName, exposedObject);
+
+        return exposedObject;
+    }
+
+    private Object instantiateBean(BeanDefinition beanDefinition) {
+        try {
+            Constructor<?> constructor = beanDefinition.getBeanClass().getDeclaredConstructor();
+            constructor.setAccessible(true);
+            return constructor.newInstance();
+        } catch (Exception e) {
+            throw new RuntimeException("创建bean失败： " + beanDefinition.getBeanClass(), e);
+        }
+    }
+
+    private Object initializeBean(Object bean, String beanName) {
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            bean = processor.postProcessBeforeInitialization(bean, beanName);
+        }
+
         invokePostConstruct(bean);
 
         if (bean instanceof InitializingBean) {
@@ -152,6 +193,12 @@ public class ApplicationContext {
                 throw new RuntimeException(e);
             }
         }
+
+        for (BeanPostProcessor processor : beanPostProcessors) {
+            bean = processor.postProcessAfterInitialization(bean, beanName);
+        }
+
+        return bean;
     }
 
     private void invokePostConstruct(Object bean) {
